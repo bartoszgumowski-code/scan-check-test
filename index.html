@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>glow25 Scan Check</title>
+<meta name="description" content="Live barcode scanner that explains what is inside a barcode: GTIN, NVE/SSCC, Charge, dates.">
+<meta name="theme-color" content="#1d5bd0">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Scan Check">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one column shaped like a handheld scanner. Live camera on top, decoded label below, other inputs and history after. */
+:root {
+  --bg: #eef1f4; --surface: #ffffff; --ink: #142029; --muted: #5a6977; --line: #d6dde4;
+  --accent: #1d5bd0; --accent-ink: #ffffff; --accent-soft: #e3ebfb;
+  --ok: #1f7a4a; --ok-soft: #e1f2e8; --bad: #b3261e; --bad-soft: #fbe5e3;
+  --ai: #6b4fbf; --ai-soft: #ece7fa; --hit: #2fd37a;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-code: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1318; --surface: #161f27; --ink: #e5ecf2; --muted: #93a3b2; --line: #26333f;
+    --accent: #6b9dff; --accent-ink: #0d1318; --accent-soft: #1b2a44;
+    --ok: #6fd39b; --ok-soft: #173326; --bad: #ff8a80; --bad-soft: #3a1c1a;
+    --ai: #b9a5ff; --ai-soft: #2a2343;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5;
+  padding-left: max(14px, env(safe-area-inset-left, 0px));
+  padding-right: max(14px, env(safe-area-inset-right, 0px));
+  padding-top: max(14px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(32px, env(safe-area-inset-bottom, 0px));
+}
+.wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+header h1 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+header p { margin: 0; color: var(--muted); font-size: 13px; }
+.bars { display: inline-flex; gap: 2px; height: 20px; }
+.bars i { display: block; background: var(--ink); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+
+/* Camera */
+.cam { padding: 0; overflow: hidden; gap: 0; }
+.viewport { position: relative; background: #000; aspect-ratio: 3 / 4; max-height: 62vh; width: 100%; }
+.viewport video, .viewport svg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.viewport video { display: block; }
+.guide { position: absolute; left: 8%; right: 8%; top: 30%; bottom: 30%; border: 2px solid rgba(255,255,255,.85); border-radius: 14px; box-shadow: 0 0 0 9999px rgba(0,0,0,.28); pointer-events: none; transition: border-color .15s; }
+.guide.hit { border-color: var(--hit); }
+.scanline { position: absolute; left: 4%; right: 4%; top: 50%; height: 2px; background: rgba(255,80,80,.9); box-shadow: 0 0 8px rgba(255,80,80,.9); }
+@media (prefers-reduced-motion: no-preference) {
+  .scanning .scanline { animation: sweep 1.6s ease-in-out infinite alternate; }
+  @keyframes sweep { from { top: 12%; } to { top: 88%; } }
+}
+.overlay-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; color: #fff; background: rgba(10,16,22,.72); }
+.overlay-msg p { margin: 0; max-width: 32ch; font-size: 15px; }
+.lastbar { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; padding: 10px 14px; background: rgba(10,16,22,.82); color: #fff; display: flex; flex-direction: column; gap: 2px; }
+.lastbar .t { font-size: 12px; opacity: .8; }
+.lastbar .v { font: 600 15px var(--font-code); overflow-wrap: anywhere; }
+.camctl { display: flex; gap: 8px; padding: 10px; flex-wrap: wrap; align-items: center; border-top: 1px solid var(--line); }
+.camctl .grow { flex: 1; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: 600 16px/1.2 var(--font-ui); border-radius: 12px; padding: 14px 18px; cursor: pointer; border: 1px solid transparent; text-align: center; user-select: none; -webkit-tap-highlight-color: transparent; }
+.btn-primary { background: var(--accent); color: var(--accent-ink); min-height: 54px; }
+.btn-light { background: #fff; color: #142029; min-height: 54px; }
+.btn-secondary { background: transparent; color: var(--accent); border-color: var(--line); padding: 11px 14px; font-size: 15px; }
+.btn-small { font: 500 13px/1 var(--font-ui); padding: 9px 12px; border-radius: 8px; background: transparent; color: var(--ink); border: 1px solid var(--line); cursor: pointer; }
+.btn-small[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.btn:focus-visible, .btn-small:focus-visible, input:focus-visible, .hist-item:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.status { font-size: 14px; color: var(--muted); min-height: 1.5em; padding: 0 2px; }
+.status.err { color: var(--bad); }
+
+/* Result */
+.result-head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.chip { font: 600 12px/1 var(--font-ui); padding: 6px 9px; border-radius: 999px; letter-spacing: 0.02em; }
+.chip-format { background: var(--accent-soft); color: var(--accent); }
+.chip-gs1 { background: var(--ai-soft); color: var(--ai); }
+.chip-example { background: var(--line); color: var(--muted); }
+.result h2 { font-size: 18px; margin: 0; text-wrap: balance; }
+.summary { margin: 0; color: var(--muted); }
+.raw-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.raw { font: 500 15px/1.5 var(--font-code); background: var(--bg); border-radius: 10px; padding: 10px 12px; overflow-wrap: anywhere; }
+.raw .seg-ai { color: var(--ai); font-weight: 600; }
+.fields { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.field { display: grid; grid-template-columns: 52px 1fr; gap: 2px 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.field .ai { font: 600 13px var(--font-code); color: var(--ai); padding-top: 1px; }
+.field .ai.none { color: var(--muted); }
+.field .body { min-width: 0; }
+.field .label { font-size: 13px; color: var(--muted); }
+.field .value { font: 600 16px var(--font-code); overflow-wrap: anywhere; }
+.field .note { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.badge { display: inline-block; font: 600 11px/1 var(--font-ui); padding: 4px 7px; border-radius: 6px; margin-left: 6px; vertical-align: 2px; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }
+.tip { font-size: 14px; background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; }
+a { color: var(--accent); }
+
+/* Other inputs */
+.other h3, .hist-head h3 { margin: 0; font-size: 15px; }
+.typed label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.typed form { display: flex; gap: 8px; }
+.typed input { flex: 1; min-width: 0; font: 500 16px var(--font-code); padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+
+/* History */
+.hist-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hist-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.hist-item { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 4px; border-top: 1px solid var(--line); cursor: pointer; border-radius: 6px; }
+.hist-item:hover { background: var(--bg); }
+.hist-item .v { font: 500 14px var(--font-code); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hist-item .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hist-item .k { font-size: 12px; color: var(--muted); grid-column: 1 / -1; }
+.empty { color: var(--muted); font-size: 14px; }
+.foot { font-size: 13px; color: var(--muted); }
+.foot p { margin: 0 0 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="bars" aria-hidden="true"><i style="width:3px"></i><i style="width:1px"></i><i style="width:2px"></i><i style="width:1px"></i><i style="width:3px"></i><i style="width:1px"></i><i style="width:2px"></i></span>Scan Check</h1>
+    <p>Point the camera at a barcode. The result appears the moment it is found.</p>
+  </header>
+
+  <section class="panel cam" aria-label="Camera scanner">
+    <div class="viewport" id="viewport">
+      <video id="video" playsinline muted autoplay></video>
+      <svg id="marks" aria-hidden="true"></svg>
+      <div class="guide" id="guide" hidden><div class="scanline"></div></div>
+      <div class="lastbar" id="lastbar" hidden><span class="t" id="lastT"></span><span class="v" id="lastV"></span></div>
+      <div class="overlay-msg" id="startBox">
+        <p id="startText">Tap to start the camera. Your browser will ask for permission the first time.</p>
+        <button class="btn btn-light" id="startBtn" type="button">Start camera</button>
+      </div>
+      <div class="overlay-msg" id="pausedBox" hidden>
+        <button class="btn btn-light" id="nextBtn" type="button">Scan next</button>
+      </div>
+    </div>
+    <div class="camctl">
+      <button class="btn-small" id="modeBtn" type="button" aria-pressed="false" title="Keep scanning without stopping after each code">Keep scanning</button>
+      <button class="btn-small" id="torchBtn" type="button" aria-pressed="false" hidden>Light</button>
+      <button class="btn-small" id="soundBtn" type="button" aria-pressed="true">Beep</button>
+      <span class="grow"></span>
+      <button class="btn-small" id="stopBtn" type="button" hidden>Stop camera</button>
+    </div>
+  </section>
+
+  <div id="status" class="status" role="status" aria-live="polite">Loading the barcode reader…</div>
+
+  <section id="result" class="panel result" aria-label="Result"></section>
+
+  <section class="panel other" aria-label="Other ways to scan">
+    <h3>Other ways</h3>
+    <label class="btn btn-secondary" for="pick">Read a barcode from a photo</label>
+    <input id="pick" type="file" accept="image/*">
+    <div class="typed">
+      <label for="typed">Type a code, or tap here and use a handheld scanner</label>
+      <form id="typedForm">
+        <input id="typed" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="(00)340123450000047111">
+        <button class="btn-small" type="submit">Check</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="History">
+    <div class="hist-head">
+      <h3>Scans on this device</h3>
+      <div class="hist-actions">
+        <button id="csvBtn" class="btn-small" type="button">Download CSV</button>
+        <button id="copyAll" class="btn-small" type="button">Copy for Excel</button>
+        <button id="clearAll" class="btn-small" type="button">Clear</button>
+      </div>
+    </div>
+    <div id="clearConfirm" class="hist-actions" hidden>
+      <button id="clearYes" class="btn-small" type="button" style="color:var(--bad)">Yes, delete history</button>
+      <button id="clearNo" class="btn-small" type="button">Cancel</button>
+    </div>
+    <ul id="hist" class="hist"></ul>
+  </section>
+
+  <footer class="foot">
+    <p>Tips: hold the phone 10 to 25 cm away and keep the barcode inside the frame. On shiny labels, tilt the phone a little to avoid glare. Use "Light" in dark corners.</p>
+    <p>Everything runs on your phone. No image or code is uploaded. History is saved only in this browser.</p>
+  </footer>
+</div>
+
+<script src="vendor/zxing-wasm/zxing-reader.iife.js"></script>
+<script src="gs1.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -113,14 +113,62 @@
   var audioCtx = null, soundOn = store("scancheck.sound") !== "0";
   $("soundBtn").setAttribute("aria-pressed", String(soundOn));
   function initAudio() { try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === "suspended") audioCtx.resume(); } catch (e) {} }
-  function beep() {
-    if (navigator.vibrate) { try { navigator.vibrate(70); } catch (e) {} }
-    if (!soundOn || !audioCtx) return;
+  /* "Blip": a short rising two-note chirp, built as a tiny WAV so it plays through a media element.
+     On iPhone this also plays when the ringer switch is on silent (Web Audio does not). */
+  function makeBlip() {
+    var rate = 22050, len = Math.round(rate * 0.16), data = new Int16Array(len), phase = 0;
+    for (var i = 0; i < len; i++) {
+      var t = i / rate;
+      var f = t < 0.06 ? 900 + (t / 0.06) * 500 : 1900 + ((t - 0.06) / 0.1) * 500;
+      var noteT = t < 0.06 ? t : t - 0.065;
+      var noteLen = t < 0.06 ? 0.06 : 0.095;
+      var env = noteT < 0 ? 0 : Math.min(1, noteT / 0.004) * Math.max(0, 1 - noteT / noteLen);
+      phase += (2 * Math.PI * f) / rate;
+      data[i] = Math.round(Math.sin(phase) * env * 0.55 * 32767);
+    }
+    var buf = new ArrayBuffer(44 + len * 2), v = new DataView(buf);
+    var w = function (o, s) { for (var k = 0; k < s.length; k++) v.setUint8(o + k, s.charCodeAt(k)); };
+    w(0, "RIFF"); v.setUint32(4, 36 + len * 2, true); w(8, "WAVE"); w(12, "fmt ");
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, "data"); v.setUint32(40, len * 2, true);
+    for (var j = 0; j < len; j++) v.setInt16(44 + j * 2, data[j], true);
+    return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  }
+  var blipEl = null, audioUnlocked = false;
+  try { blipEl = new Audio(makeBlip()); blipEl.preload = "auto"; } catch (e) { blipEl = null; }
+  function unlockAudio() {
+    initAudio();
+    if (audioUnlocked || !blipEl) return;
+    blipEl.muted = true;
+    var p = blipEl.play();
+    var finish = function () { blipEl.pause(); blipEl.currentTime = 0; blipEl.muted = false; audioUnlocked = true; };
+    if (p && p.then) p.then(finish, function () { blipEl.muted = false; }); else finish();
+  }
+  document.addEventListener("pointerdown", unlockAudio, { passive: true });
+  document.addEventListener("keydown", unlockAudio);
+
+  function webAudioBlip() {
+    if (!audioCtx) return;
     try {
-      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.type = "square"; o.frequency.value = 1760; g.gain.value = 0.06;
-      o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.08);
+      var now = audioCtx.currentTime, o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(900, now); o.frequency.linearRampToValueAtTime(1400, now + 0.06);
+      o.frequency.setValueAtTime(1900, now + 0.065); o.frequency.linearRampToValueAtTime(2400, now + 0.16);
+      g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.35, now + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+      o.connect(g); g.connect(audioCtx.destination); o.start(now); o.stop(now + 0.17);
     } catch (e) {}
+  }
+  function beep() {
+    if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
+    if (!soundOn) return;
+    if (!blipEl) return webAudioBlip();
+    try {
+      blipEl.currentTime = 0;
+      var p = blipEl.play();
+      if (p && p.catch) p.catch(webAudioBlip);
+    } catch (e) { webAudioBlip(); }
   }
   $("soundBtn").addEventListener("click", function () { soundOn = !soundOn; initAudio(); this.setAttribute("aria-pressed", String(soundOn)); store("scancheck.sound", soundOn ? "1" : "0"); });
 
